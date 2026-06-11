@@ -62,9 +62,9 @@ def obtener_frase():
     except:
         pass
     return random.choice(fallbacks)
-
+    
 # ============================================================
-# 3. NOTICIAS - URls Corregidas
+# 3. NOTICIAS - VERSIÓN CON LOGS DETALLADOS
 # ============================================================
 def obtener_noticias():
     secciones = [
@@ -73,27 +73,54 @@ def obtener_noticias():
     ]
     todas = []
     
+    print("\n--- INICIANDO EXTRACCIÓN DE NOTICIAS ---")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
         page = browser.new_page()
         
         for sec in secciones:
+            print(f"\n➤ Procesando sección: {sec['nombre']}")
             try:
-                page.goto(sec["url"], timeout=20000)
+                print(f"[{sec['nombre']}] Navegando a {sec['url']}...")
+                response = page.goto(sec["url"], timeout=20000)
+                print(f"[{sec['nombre']}] Estatus HTTP: {response.status if response else 'Desconocido'}")
+                
+                print(f"[{sec['nombre']}] Esperando el selector 'article a'...")
                 page.wait_for_selector("article a", timeout=10000)
+                
                 elementos = page.query_selector_all("article a")
+                print(f"[{sec['nombre']}] Se encontraron {len(elementos)} elementos con 'article a'.")
+                
                 count = 0
+                vacios = 0
+                cortos = 0
+                
                 for el in elementos:
                     titulo = el.inner_text().strip()
-                    if titulo and len(titulo) > 10 and count < NOTICIAS_MAX:
+                    
+                    # Contabilizar por qué se omiten
+                    if not titulo:
+                        vacios += 1
+                        continue
+                    if len(titulo) <= 10:
+                        cortos += 1
+                        continue
+                        
+                    if count < NOTICIAS_MAX:
                         todas.append({
                             "icono": sec["icono"],
                             "titulo": titulo,
                             "seccion": sec["nombre"]
                         })
                         count += 1
+                        print(f"[{sec['nombre']}] Noticia {count} guardada: {titulo[:30]}...")
+                
+                print(f"[{sec['nombre']}] Resumen: {count} guardadas | {vacios} vacías | {cortos} muy cortas.")
+                        
             except Exception as e:
-                print(f"Error en {sec['nombre']}: {e}")
+                print(f"[{sec['nombre']}] ERROR: {type(e).__name__} - {e}")
+                
+        print("\n--- CERRANDO NAVEGADOR ---")
         browser.close()
     
     if not todas:
