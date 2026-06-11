@@ -1,8 +1,9 @@
 import requests
-import re
+import json
 import random
 import time
 from datetime import datetime, timedelta
+from playwright.sync_api import sync_playwright
 import os
 from deep_translator import GoogleTranslator
 
@@ -12,11 +13,12 @@ from deep_translator import GoogleTranslator
 CALLMEBOT_API_KEY = os.environ.get("CALLMEBOT_API_KEY")
 TELEFONO = os.environ.get("TELEFONO")
 OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY")
-NOTICIAS_MAX = 10
+NOTICIAS_MAX = 10  # <--- AHORA 10 POR SECCIÓN
 
 LATITUD = "20.0205"
 LONGITUD = "-98.7865"
 
+# Traductor
 translator = GoogleTranslator(source='en', target='es')
 
 # ============================================================
@@ -29,14 +31,17 @@ def obtener_poema():
         ("Tarde o temprano, el que busca halla.", "Anónimo"),
     ]
     try:
-        resp = requests.get("https://poetrydb.org/random/1", headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        resp = requests.get("https://poetrydb.org/random/1", headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             data = resp.json()[0]
             texto_original = "\n".join([l for l in data["lines"] if l.strip()][:4])
-            texto_traducido = translator.translate(texto_original) if len(texto_original) > 10 else texto_original
+            if len(texto_original) > 10:
+                texto_traducido = translator.translate(texto_original)
+            else:
+                texto_traducido = texto_original
             return texto_traducido, data["author"]
-    except Exception as e:
-        print(f"Error poema: {e}")
+    except:
+        pass
     return random.choice(fallbacks)
 
 # ============================================================
@@ -49,111 +54,143 @@ def obtener_frase():
         ("La vida es lo que pasa mientras estás ocupado haciendo otros planes.", "John Lennon"),
     ]
     try:
-        resp = requests.get("https://zenquotes.io/api/random", headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        resp = requests.get("https://zenquotes.io/api/random", headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             q = resp.json()[0]
             texto_traducido = translator.translate(q["q"])
             return texto_traducido, q["a"]
-    except Exception as e:
-        print(f"Error frase: {e}")
+    except:
+        pass
     return random.choice(fallbacks)
 
 # ============================================================
-# 3. NOTICIAS (usando regex, sin Playwright)
+# 3. NOTICIAS - VERSIÓN ORIGINAL pero SIN URLs y con 10 noticias
 # ============================================================
-def extraer_titulos_de_url(url, patron_exclusion=None):
-    """Obtiene títulos de noticias desde el HTML de una URL."""
-    try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
-        html = resp.text
+def obtener_noticias():
+    secciones = [
+        {"url": "https://oem.com.mx/elsoldehidalgo/local/", "icono": "📍", "nombre": "Local"},
+        {"url": "https://oem.com.mx/elsoldehidalgo/turismo/", "icono": "🎉", "nombre": "Turismo"}
+    ]
+    todas = []
+    
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+        page = browser.new_page()
         
-        # Buscar patrones de títulos en etiquetas <a> que contengan URLs del sitio
-        # Ejemplo: <a href="/elsoldehidalgo/local/...">Título</a>
-        patron = r'<a[^>]+href="[^"]*?(?:elsoldehidalgo/(?:local|turismo)/[^"]+)"[^>]*>([^<]+)</a>'
-        matches = re.findall(patron, html)
-        
-        # Limpiar y filtrar títulos
-        titulos = []
-        for m in matches:
-            titulo = m.strip()
-            if titulo and len(titulo) > 10 and not titulo.startswith('LEER'):
-                # Evitar basura como "GOSSIP" o "PUBLICIDAD"
-                if 'GOSSIP' not in titulo and 'PUBLICIDAD' not in titulo:
-                    titulos.append(titulo)
-        
-        # Eliminar duplicados (algunos enlaces se repiten)
-        titulos_unicos = []
-        for t in titulos:
-            if t not in titulos_unicos:
-                titulos_unicos.append(t)
-        
-        return titulos_unicos[:NOTICIAS_MAX]
-    except Exception as e:
-        print(f"Error extrayendo de {url}: {e}")
-        return []
-
-def obtener_todas_noticias():
-    secciones = {
-        "Local": "https://oem.com.mx/elsoldehidalgo/local/",
-        "Turismo": "https://oem.com.mx/elsoldehidalgo/turismo/"
-    }
-    resultados = {}
-    for nombre, url in secciones.items():
-        print(f"Extrayendo {nombre}...")
-        titulos = extraer_titulos_de_url(url)
-        resultados[nombre] = titulos
-        print(f"  Encontrados {len(titulos)} títulos.")
-    return resultados
+        for sec in secciones:
+            try:
+                page.goto(sec["url"], timeout=20000)
+                page.wait_for_selector("article a", timeout=10000)
+                elementos = page.query_selector_all("article a")
+                count = 0
+                for el in elementos:
+                    titulo = el.inner_text().strip()
+                    if titulo and len(titulo) > 10 and count < NOTICIAS_MAX:
+                        todas.append({
+                            "icono": sec["icono"],
+                            "titulo": titulo,
+                            "seccion": sec["nombre"]
+                        })
+                        count += 1
+            except Exception as e:
+                print(f"Error en {sec['nombre']}: {e}")
+        browser.close()
+    
+    if not todas:
+        return "• No se pudieron obtener noticias hoy."
+    
+    # Construir texto separado por secciones
+    resultado = ""
+    for seccion in ["Local", "Turismo"]:
+        noticias_sec = [n for n in todas if n["seccion"] == seccion]
+        if noticias_sec:
+            resultado += f"*{seccion}*\n"
+            for n in noticias_sec:
+                resultado += f"{n['icono']} {n['titulo']}\n"
+            resultado += "\n"
+    return resultado
 
 # ============================================================
-# 4. CLIMA (resumido)
+# 4. CLIMA (igual, funciona)
 # ============================================================
 def obtener_clima():
     url = f"https://api.openweathermap.org/data/2.5/forecast?lat={LATITUD}&lon={LONGITUD}&appid={OPENWEATHER_API_KEY}&units=metric&lang=es"
     try:
-        resp = requests.get(url, timeout=10)
+        resp = requests.get(url)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
-        return f"⚠️ Clima no disponible: {e}"
-    
+        print(f"Error clima: {e}")
+        return "⚠️ No se pudo obtener el pronóstico."
+
     temp_max = -999
     temp_min = 999
     viento_max = 0
-    alerta_lluvia = False
-    prob_max = 0
+    frecuencias_desc = {}
+    ventanas_lluvia = []
+    dentro_alerta = False
+    hora_inicio = ""
+    hora_fin = ""
+    prob_pico = 0
     
-    for i in range(8):  # 24 horas
+    for i in range(8):
         p = data["list"][i]
+        dt_utc = datetime.strptime(p["dt_txt"], "%Y-%m-%d %H:%M:%S")
+        hora_local = dt_utc - timedelta(hours=6)
+        hora_texto = hora_local.strftime("%I:%M %p").lstrip("0").replace(" 0", " ")
+        
         temp_max = max(temp_max, p["main"]["temp_max"])
         temp_min = min(temp_min, p["main"]["temp_min"])
         viento_kmh = p["wind"]["speed"] * 3.6
         viento_max = max(viento_max, viento_kmh)
-        prob = round(p["pop"] * 100)
-        if prob > prob_max:
-            prob_max = prob
-        if prob >= 38:
-            alerta_lluvia = True
+        desc = p["weather"][0]["description"]
+        frecuencias_desc[desc] = frecuencias_desc.get(desc, 0) + 1
+        prob_lluvia = round(p["pop"] * 100)
+        
+        if prob_lluvia >= 38:
+            if not dentro_alerta:
+                dentro_alerta = True
+                hora_inicio = hora_texto
+                prob_pico = prob_lluvia
+            else:
+                prob_pico = max(prob_pico, prob_lluvia)
+            hora_fin = hora_texto
+        else:
+            if dentro_alerta:
+                ventanas_lluvia.append(f"⏳ *{hora_inicio} a {hora_fin}* | Pico máx: *{prob_pico}%* 🌧️")
+                dentro_alerta = False
+                prob_pico = 0
     
-    desc = data["list"][0]["weather"][0]["description"].capitalize()
+    if dentro_alerta:
+        ventanas_lluvia.append(f"⏳ *{hora_inicio} en adelante* | Pico máx: *{prob_pico}%* 🌧️")
     
-    clima = f"🌡️ {round(temp_min)}°C a {round(temp_max)}°C\n"
-    clima += f"🌤️ {desc}\n"
-    clima += f"💨 Viento: {round(viento_max)} km/h\n"
-    if alerta_lluvia:
-        clima += f"🌧️ Prob. lluvia: {prob_max}% (posible)"
+    desc_predominante = max(frecuencias_desc, key=frecuencias_desc.get) if frecuencias_desc else "despejado"
+    desc_predominante = desc_predominante.capitalize()
+    
+    clima_msg = f"⚡ *ASISTENTE CLIMÁTICO CENTRAL* ⚡\n"
+    clima_msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+    clima_msg += f"📊 *RESUMEN GENERAL (24 HORAS):*\n"
+    clima_msg += f"🌤 *Cielo:* {desc_predominante}\n"
+    clima_msg += f"🌡️ *Extremos:* {round(temp_min)}°C a {round(temp_max)}°C\n"
+    clima_msg += f"💨 *Ráfagas de viento:* {round(viento_max)} km/h\n\n"
+    clima_msg += f"🚨 *VENTANAS DE ATENCIÓN POR LLUVIAS:* 🚨\n"
+    clima_msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+    
+    if ventanas_lluvia:
+        clima_msg += f"_Rangos críticos detectados (>38% de probabilidad):_\n\n"
+        clima_msg += "\n".join(ventanas_lluvia) + "\n\n"
+        clima_msg += f"⚠️ *Recomendación:* Organiza tus actividades al exterior fuera de estos horarios."
     else:
-        clima += "☀️ Sin lluvias relevantes"
-    return clima
+        clima_msg += f"🟢 *Todo en orden:* La probabilidad de lluvia se mantendrá baja (<38%) las próximas 24 horas. ¡Excelente día! 😎"
+    
+    return clima_msg
 
 # ============================================================
 # 5. CHISTE
 # ============================================================
 def obtener_chiste():
     try:
-        resp = requests.get("https://v2.jokeapi.dev/joke/Any?lang=es&type=single&blacklistFlags=nsfw,racist,sexist", timeout=10)
+        resp = requests.get("https://v2.jokeapi.dev/joke/Any?lang=es&type=single&blacklistFlags=nsfw,racist,sexist")
         if resp.status_code == 200:
             data = resp.json()
             if not data.get("error") and data.get("joke"):
@@ -163,81 +200,95 @@ def obtener_chiste():
     return "Programar es 10% escribir código y 90% entender por qué no funciona. 💻"
 
 # ============================================================
-# 6. MENSAJES CORTOS
+# 6. CONSTRUIR MENSAJE
 # ============================================================
-def mensaje_bienvenida():
+def construir_mensaje(poema_texto, poema_autor, frase_texto, frase_autor, noticias_texto, clima_texto, chiste_texto):
     hoy = datetime.now().strftime("%A %d de %B")
-    return f"🌅 Buenos días — {hoy}"
+    SEP = "━━━━━━━━━━━━━━━━━━━━"
+    return f"""🌅 *Buenos días — {hoy}*
+{SEP}
 
-def mensaje_poema_frase(poema, autor_poema, frase, autor_frase):
-    return f"🌹 Verso:\n{poema}\n— {autor_poema}\n\n🧠 Reflexión:\n{frase}\n— {autor_frase}"
+🌹 *VERSOS DEL DÍA*
+_{poema_texto}_
+    ✍️ _— {poema_autor}_
 
-def mensaje_noticias_seccion(nombre, icono, titulos):
-    if not titulos:
-        return f"{icono} {nombre}: Sin noticias nuevas"
-    texto = f"{icono} {nombre}\n"
-    for t in titulos[:NOTICIAS_MAX]:
-        texto += f"• {t}\n"
-    return texto.strip()
+🧠 *REFLEXIÓN PARA MEDITAR*
+"{frase_texto}"
+    ✍️ _— {frase_autor}_
 
-def mensaje_despedida():
-    return "✨ Un día a la vez. ¡Que tengas un gran día!"
+{SEP}
+📰 *NOTICIAS DE HIDALGO*
+
+{noticias_texto}
+{SEP}
+{clima_texto}
+
+{SEP}
+😄 *MOMENTO DE RELAX*
+_{chiste_texto}_
+
+{SEP}
+✨ _Un día a la vez. ¡Que tengas un gran día!_"""
 
 # ============================================================
 # 7. ENVIAR WHATSAPP
 # ============================================================
 def enviar_whatsapp(mensaje):
-    if not mensaje or len(mensaje) < 5:
-        return
     import urllib.parse
-    texto = urllib.parse.quote(mensaje)
-    url = f"https://api.callmebot.com/whatsapp.php?phone={TELEFONO}&apikey={CALLMEBOT_API_KEY}&text={texto}"
+    texto_codificado = urllib.parse.quote(mensaje)
+    url = f"https://api.callmebot.com/whatsapp.php?phone={TELEFONO}&apikey={CALLMEBOT_API_KEY}&text={texto_codificado}"
     try:
-        resp = requests.get(url, timeout=15)
-        print(f"Enviado ({len(mensaje)} chars) → {resp.status_code}")
-        time.sleep(2)  # esperar para no saturar
+        resp = requests.get(url)
+        print(f"CallMeBot respondió: {resp.status_code}")
     except Exception as e:
-        print(f"Error enviando: {e}")
+        print(f"Error: {e}")
 
 # ============================================================
-# 8. MAIN
+# 8. DIVIDIR MENSAJE (para que no se corte)
+# ============================================================
+def dividir_mensaje(texto, limite=1000):
+    partes = []
+    while len(texto) > limite:
+        corte = texto.rfind('\n', 0, limite)
+        if corte == -1:
+            corte = texto.rfind(' ', 0, limite)
+        if corte == -1 or corte < limite - 100:
+            corte = limite
+        partes.append(texto[:corte].strip())
+        texto = texto[corte:].strip()
+    partes.append(texto)
+    return partes
+
+# ============================================================
+# 9. MAIN
 # ============================================================
 def main():
-    print("=== Iniciando dashboard diario ===")
+    print("Obteniendo poema...")
+    poema_texto, poema_autor = obtener_poema()
+    print("Obteniendo frase...")
+    frase_texto, frase_autor = obtener_frase()
+    print("Obteniendo noticias...")
+    noticias_texto = obtener_noticias()
+    print("Obteniendo clima...")
+    clima_texto = obtener_clima()
+    print("Obteniendo chiste...")
+    chiste_texto = obtener_chiste()
     
-    print("1. Poema y frase...")
-    poema, autor_poema = obtener_poema()
-    frase, autor_frase = obtener_frase()
+    mensaje_completo = construir_mensaje(poema_texto, poema_autor, frase_texto, frase_autor, noticias_texto, clima_texto, chiste_texto)
     
-    print("2. Noticias...")
-    noticias = obtener_todas_noticias()
+    with open("mensaje.log", "w", encoding="utf-8") as f:
+        f.write(mensaje_completo)
     
-    print("3. Clima...")
-    clima = obtener_clima()
+    partes = dividir_mensaje(mensaje_completo, limite=1000)
+    print(f"Mensaje de {len(mensaje_completo)} caracteres dividido en {len(partes)} partes.")
     
-    print("4. Chiste...")
-    chiste = obtener_chiste()
+    for i, parte in enumerate(partes):
+        print(f"Enviando parte {i+1}/{len(partes)}...")
+        enviar_whatsapp(parte)
+        if i < len(partes) - 1:
+            time.sleep(3)
     
-    # Enviar bloques
-    enviar_whatsapp(mensaje_bienvenida())
-    time.sleep(1)
-    enviar_whatsapp(mensaje_poema_frase(poema, autor_poema, frase, autor_frase))
-    time.sleep(1)
-    
-    if "Local" in noticias:
-        enviar_whatsapp(mensaje_noticias_seccion("Local", "📍", noticias["Local"]))
-        time.sleep(1)
-    if "Turismo" in noticias:
-        enviar_whatsapp(mensaje_noticias_seccion("Turismo", "🎉", noticias["Turismo"]))
-        time.sleep(1)
-    
-    enviar_whatsapp(f"⛅ Clima:\n{clima}")
-    time.sleep(1)
-    enviar_whatsapp(f"😂 Chiste:\n{chiste}")
-    time.sleep(1)
-    enviar_whatsapp(mensaje_despedida())
-    
-    print("=== Dashboard enviado correctamente ===")
+    print("¡Listo!")
 
 if __name__ == "__main__":
     main()
