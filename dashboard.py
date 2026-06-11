@@ -233,26 +233,20 @@ def construir_mensaje(poema_texto, poema_autor, frase_texto, frase_autor, notici
     SEP = "━━━━━━━━━━━━━━━━━━━━"
     return f"""🌅 *Buenos días — {hoy}*
 {SEP}
-
 🌹 *VERSOS DEL DÍA*
 _{poema_texto}_
     ✍️ _— {poema_autor}_
-
 🧠 *REFLEXIÓN PARA MEDITAR*
 "{frase_texto}"
     ✍️ _— {frase_autor}_
-
 {SEP}
 📰 *NOTICIAS DE HIDALGO*
-
 {noticias_texto}
 {SEP}
 {clima_texto}
-
 {SEP}
 😄 *MOMENTO DE RELAX*
 _{chiste_texto}_
-
 {SEP}
 ✨ _Un día a la vez. ¡Que tengas un gran día!_"""
 
@@ -311,7 +305,7 @@ def main():
         f.write(mensaje_completo)
     
     # DIVISIÓN CON LÍMITE DE 600 PARA EVITAR CORTES EN LA URL
-    partes = dividir_mensaje(mensaje_completo, limite=600)
+    partes = dividir_mensaje(mensaje_completo, limite=450)
     print(f"Mensaje de {len(mensaje_completo)} caracteres dividido en {len(partes)} partes.")
     
     for i, parte in enumerate(partes):
