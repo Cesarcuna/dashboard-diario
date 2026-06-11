@@ -1,6 +1,7 @@
 import requests
 import json
 import random
+import time  # <-- NUEVO: para pausar entre mensajes
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 import os
@@ -10,10 +11,10 @@ import os
 # ============================================================
 CALLMEBOT_API_KEY = os.environ.get("CALLMEBOT_API_KEY")
 TELEFONO = os.environ.get("TELEFONO")
-OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY")  # ← Nueva
+OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY")
 NOTICIAS_MAX = 3
 
-# Coordenadas de Pachuca (puedes cambiarlas)
+# Coordenadas de Pachuca
 LATITUD = "20.0205"
 LONGITUD = "-98.7865"
 
@@ -99,13 +100,9 @@ def obtener_noticias():
     return resultado
 
 # ============================================================
-# 4. CLIMA (basado en tu código de Apps Script)
+# 4. CLIMA
 # ============================================================
 def obtener_clima():
-    """
-    Retorna un string con el resumen climático para las próximas 24 horas,
-    incluyendo ventanas de lluvia con probabilidad >=38%.
-    """
     url = f"https://api.openweathermap.org/data/2.5/forecast?lat={LATITUD}&lon={LONGITUD}&appid={OPENWEATHER_API_KEY}&units=metric&lang=es"
     try:
         resp = requests.get(url)
@@ -126,32 +123,20 @@ def obtener_clima():
     hora_fin = ""
     prob_pico = 0
     
-    # Procesamos los primeros 8 bloques (24 horas, cada 3 horas)
     for i in range(8):
         p = data["list"][i]
-        # Convertir dt_txt a hora local CDMX
         dt_utc = datetime.strptime(p["dt_txt"], "%Y-%m-%d %H:%M:%S")
-        # Ajustar a CDMX (UTC-6 estándar, UTC-5 horario verano). Usamos pytz? 
-        # Para evitar dependencias extra, calculamos offset manual según fecha (simplificado: usamos UTC-6 siempre)
-        # En el mensaje no es crítica la precisión del cambio de hora; el usuario entiende hora aproximada.
-        # Pero para que sea exacto, usaremos la función con timezone de Python (requiere pip install pytz).
-        # Alternativa: restar 6 horas directamente (CDMX sin horario verano). Es aceptable.
-        hora_local = dt_utc - timedelta(hours=6)  # UTC-6 fijo (simplificado)
+        hora_local = dt_utc - timedelta(hours=6)
         hora_texto = hora_local.strftime("%I:%M %p").lstrip("0").replace(" 0", " ")
         
-        # Temperaturas
         temp_max = max(temp_max, p["main"]["temp_max"])
         temp_min = min(temp_min, p["main"]["temp_min"])
-        # Viento
         viento_kmh = p["wind"]["speed"] * 3.6
         viento_max = max(viento_max, viento_kmh)
-        # Descripción
         desc = p["weather"][0]["description"]
         frecuencias_desc[desc] = frecuencias_desc.get(desc, 0) + 1
-        # Probabilidad de lluvia (pop)
         prob_lluvia = round(p["pop"] * 100)
         
-        # Detectar ventanas de lluvia >=38%
         if prob_lluvia >= 38:
             if not dentro_alerta:
                 dentro_alerta = True
@@ -169,11 +154,9 @@ def obtener_clima():
     if dentro_alerta:
         ventanas_lluvia.append(f"⏳ *{hora_inicio} en adelante* | Pico máx: *{prob_pico}%* 🌧️")
     
-    # Descripción predominante
     desc_predominante = max(frecuencias_desc, key=frecuencias_desc.get) if frecuencias_desc else "despejado"
     desc_predominante = desc_predominante.capitalize()
     
-    # Construir mensaje del clima
     clima_msg = f"⚡ *ASISTENTE CLIMÁTICO CENTRAL* ⚡\n"
     clima_msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
     clima_msg += f"📊 *RESUMEN GENERAL (24 HORAS):*\n"
@@ -207,7 +190,7 @@ def obtener_chiste():
     return "Programar es 10% escribir código y 90% entender por qué no funciona. 💻"
 
 # ============================================================
-# 6. CONSTRUIR MENSAJE COMPLETO (integrando clima)
+# 6. CONSTRUIR MENSAJE COMPLETO
 # ============================================================
 def construir_mensaje(poema_texto, poema_autor, frase_texto, frase_autor, noticias_texto, clima_texto, chiste_texto):
     hoy = datetime.now().strftime("%A %d de %B")
@@ -238,21 +221,39 @@ _{chiste_texto}_
 ✨ _Un día a la vez. ¡Que tengas un gran día!_"""
 
 # ============================================================
-# 7. ENVIAR WHATSAPP
+# 7. ENVIAR WHATSAPP (sin cambios, pero lo usaremos varias veces)
 # ============================================================
 def enviar_whatsapp(mensaje):
-    # Limitar longitud (CallMeBot tiene límite ~4096 caracteres, pero enviaremos igual)
-    # Opcional: partir mensajes muy largos.
     url = f"https://api.callmebot.com/whatsapp.php?phone={TELEFONO}&apikey={CALLMEBOT_API_KEY}&text={mensaje}"
     try:
-        # CallMeBot requiere que el texto esté codificado como parámetro GET, pero requests lo hace automáticamente.
         resp = requests.get(url)
         print(f"CallMeBot respondió: {resp.status_code} - {resp.text[:100]}")
     except Exception as e:
         print(f"Error al enviar WhatsApp: {e}")
 
 # ============================================================
-# 8. FUNCIÓN PRINCIPAL
+# 8. NUEVA FUNCIÓN: DIVIDIR MENSAJE EN PARTES
+# ============================================================
+def dividir_mensaje(texto, limite=1500):
+    """
+    Divide un texto largo en fragmentos sin cortar palabras a la mitad.
+    El límite por defecto es 1500 caracteres (CallMeBot puede manejar ~1600, pero usamos margen).
+    """
+    partes = []
+    while len(texto) > limite:
+        # Buscar el último salto de línea dentro del límite
+        corte = texto.rfind('\n', 0, limite)
+        if corte == -1:
+            corte = texto.rfind(' ', 0, limite)  # buscar último espacio
+        if corte == -1:
+            corte = limite  # cortar forzosamente
+        partes.append(texto[:corte].strip())
+        texto = texto[corte:].strip()
+    partes.append(texto)
+    return partes
+
+# ============================================================
+# 9. FUNCIÓN PRINCIPAL MODIFICADA
 # ============================================================
 def main():
     print("Obteniendo poema...")
@@ -266,14 +267,23 @@ def main():
     print("Obteniendo chiste...")
     chiste_texto = obtener_chiste()
     
-    mensaje = construir_mensaje(poema_texto, poema_autor, frase_texto, frase_autor, noticias_texto, clima_texto, chiste_texto)
+    mensaje_completo = construir_mensaje(poema_texto, poema_autor, frase_texto, frase_autor, noticias_texto, clima_texto, chiste_texto)
     
     # Guardar copia de respaldo
     with open("mensaje.log", "w", encoding="utf-8") as f:
-        f.write(mensaje)
+        f.write(mensaje_completo)
     
-    print("Enviando WhatsApp...")
-    enviar_whatsapp(mensaje)
+    # Dividir el mensaje en partes
+    partes = dividir_mensaje(mensaje_completo, limite=1500)
+    print(f"El mensaje se dividió en {len(partes)} parte(s).")
+    
+    # Enviar cada parte
+    for i, parte in enumerate(partes):
+        print(f"Enviando parte {i+1}/{len(partes)}...")
+        enviar_whatsapp(parte)
+        if i < len(partes) - 1:
+            time.sleep(3)  # espera 3 segundos entre mensajes para evitar bloqueos
+    
     print("¡Proceso completado!")
 
 if __name__ == "__main__":
