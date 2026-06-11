@@ -2,23 +2,25 @@ import requests
 import json
 import random
 import time
+import re
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 import os
 from deep_translator import GoogleTranslator
 
 # ============================================================
-# CONFIGURACIÓN
+# CONFIGURACIÓN (variables de entorno)
 # ============================================================
 CALLMEBOT_API_KEY = os.environ.get("CALLMEBOT_API_KEY")
 TELEFONO = os.environ.get("TELEFONO")
 OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY")
-NOTICIAS_MAX = 3
+NOTICIAS_MAX = 10  # ¡Ahora son 10 noticias por sección!
 
+# Coordenadas de Pachuca
 LATITUD = "20.0205"
 LONGITUD = "-98.7865"
 
-# Traductor (se reutiliza)
+# Traductor
 translator = GoogleTranslator(source='en', target='es')
 
 # ============================================================
@@ -35,7 +37,6 @@ def obtener_poema():
         if resp.status_code == 200:
             data = resp.json()[0]
             texto_original = "\n".join([l for l in data["lines"] if l.strip()][:4])
-            # Traducir texto (solo si tiene más de 10 caracteres)
             if len(texto_original) > 10:
                 texto_traducido = translator.translate(texto_original)
             else:
@@ -68,14 +69,14 @@ def obtener_frase():
     return random.choice(fallbacks)
 
 # ============================================================
-# 3. NOTICIAS (igual, sin cambios)
+# 3. NOTICIAS (NUEVA VERSIÓN - solo títulos, sin URLs, más noticias)
 # ============================================================
 def obtener_noticias():
     secciones = [
-        {"url": "https://oem.com.mx/elsoldehidalgo/local/", "icono": "📍", "nombre": "local"},
-        {"url": "https://oem.com.mx/elsoldehidalgo/turismo/", "icono": "🎉", "nombre": "turismo"}
+        {"url": "https://oem.com.mx/elsoldehidalgo/local/", "icono": "📍", "nombre": "Local"},
+        {"url": "https://oem.com.mx/elsoldehidalgo/turismo/", "icono": "🎉", "nombre": "Turismo"}
     ]
-    todas = []
+    todas_las_noticias = []
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
@@ -83,32 +84,65 @@ def obtener_noticias():
         
         for sec in secciones:
             try:
+                print(f"Accediendo a {sec['url']}...")
                 page.goto(sec["url"], timeout=20000)
-                page.wait_for_selector("article a", timeout=10000)
-                elementos = page.query_selector_all("article a")
-                count = 0
-                for el in elementos:
-                    titulo = el.inner_text().strip()
-                    href = el.get_attribute("href")
-                    if titulo and href and len(titulo) > 10 and count < NOTICIAS_MAX:
-                        url_completa = href if href.startswith("http") else f"https://oem.com.mx{href}"
-                        todas.append({
-                            "icono": sec["icono"],
-                            "titulo": titulo,
-                            "url": url_completa,
-                            "seccion": sec["nombre"]
-                        })
-                        count += 1
+                page.wait_for_load_state("networkidle")
+                
+                # --- NUEVO MÉTODO: Extraer todo el texto de la página ---
+                texto_completo = page.locator('body').inner_text()
+                lineas = texto_completo.split('\n')
+                
+                # --- Extraer títulos: líneas que comienzan con '### ' ---
+                titulos_encontrados = []
+                for linea in lineas:
+                    linea = linea.strip()
+                    if linea.startswith('### '):
+                        # Limpiar el título: eliminar '### ' y lo que sigue a 'GOSSIP'
+                        titulo_limpio = linea[4:]  # Eliminar '### '
+                        # Si el título contiene 'GOSSIP', cortar ahí
+                        if 'GOSSIP' in titulo_limpio:
+                            titulo_limpio = titulo_limpio.split('GOSSIP')[0].strip()
+                        # También eliminar cualquier texto después de '### ' que no sea parte del título
+                        if titulo_limpio and not titulo_limpio.startswith('¿Qué') and len(titulo_limpio) > 10:
+                            titulos_encontrados.append(titulo_limpio)
+                
+                # Tomar los primeros NOTICIAS_MAX títulos únicos (evitar duplicados)
+                titulos_unicos = []
+                for t in titulos_encontrados:
+                    if t not in titulos_unicos:
+                        titulos_unicos.append(t)
+                
+                # Limitar a NOTICIAS_MAX
+                titulos_final = titulos_unicos[:NOTICIAS_MAX]
+                
+                print(f"Se encontraron {len(titulos_final)} noticias en la sección {sec['nombre']}")
+                
+                # Agregar a la lista general
+                for titulo in titulos_final:
+                    todas_las_noticias.append({
+                        "icono": sec["icono"],
+                        "titulo": titulo,
+                        "seccion": sec["nombre"]
+                    })
+                    
             except Exception as e:
-                print(f"Error en {sec['nombre']}: {e}")
+                print(f"Error procesando {sec['nombre']}: {e}")
         browser.close()
     
-    if not todas:
+    # Construir el texto final
+    if not todas_las_noticias:
         return "• No se pudieron obtener noticias hoy."
     
+    # Separar por secciones para mejor organización
     resultado = ""
-    for n in todas[:NOTICIAS_MAX]:
-        resultado += f"{n['icono']} *{n['titulo']}*\n🔗 {n['url']}\n\n"
+    for seccion in ["Local", "Turismo"]:
+        noticias_seccion = [n for n in todas_las_noticias if n["seccion"] == seccion]
+        if noticias_seccion:
+            resultado += f"*{seccion}*\n"
+            for n in noticias_seccion:
+                resultado += f"{n['icono']} {n['titulo']}\n"
+            resultado += "\n"
+    
     return resultado
 
 # ============================================================
@@ -188,7 +222,7 @@ def obtener_clima():
     return clima_msg
 
 # ============================================================
-# 5. CHISTE (ya viene en español de JokeAPI)
+# 5. CHISTE (sin cambios)
 # ============================================================
 def obtener_chiste():
     try:
@@ -202,7 +236,7 @@ def obtener_chiste():
     return "Programar es 10% escribir código y 90% entender por qué no funciona. 💻"
 
 # ============================================================
-# 6. CONSTRUIR MENSAJE
+# 6. CONSTRUIR MENSAJE (sin cambios)
 # ============================================================
 def construir_mensaje(poema_texto, poema_autor, frase_texto, frase_autor, noticias_texto, clima_texto, chiste_texto):
     hoy = datetime.now().strftime("%A %d de %B")
@@ -233,10 +267,9 @@ _{chiste_texto}_
 ✨ _Un día a la vez. ¡Que tengas un gran día!_"""
 
 # ============================================================
-# 7. ENVIAR WHATSAPP
+# 7. ENVIAR WHATSAPP (sin cambios)
 # ============================================================
 def enviar_whatsapp(mensaje):
-    # Codificar el mensaje para URL
     import urllib.parse
     texto_codificado = urllib.parse.quote(mensaje)
     url = f"https://api.callmebot.com/whatsapp.php?phone={TELEFONO}&apikey={CALLMEBOT_API_KEY}&text={texto_codificado}"
@@ -247,19 +280,15 @@ def enviar_whatsapp(mensaje):
         print(f"Error al enviar WhatsApp: {e}")
 
 # ============================================================
-# 8. DIVIDIR MENSAJE (mejorado)
+# 8. DIVIDIR MENSAJE (sin cambios)
 # ============================================================
 def dividir_mensaje(texto, limite=1000):
-    """
-    Divide el texto en partes sin cortar palabras ni URLs.
-    """
     partes = []
     while len(texto) > limite:
-        # Buscar corte por salto de línea
         corte = texto.rfind('\n', 0, limite)
         if corte == -1:
             corte = texto.rfind(' ', 0, limite)
-        if corte == -1 or corte < limite - 100:  # si no hay espacio o salto cerca del límite, forzar corte en límite
+        if corte == -1 or corte < limite - 100:
             corte = limite
         partes.append(texto[:corte].strip())
         texto = texto[corte:].strip()
@@ -267,14 +296,14 @@ def dividir_mensaje(texto, limite=1000):
     return partes
 
 # ============================================================
-# 9. MAIN
+# 9. FUNCIÓN PRINCIPAL MODIFICADA
 # ============================================================
 def main():
     print("Obteniendo poema...")
     poema_texto, poema_autor = obtener_poema()
     print("Obteniendo frase...")
     frase_texto, frase_autor = obtener_frase()
-    print("Obteniendo noticias...")
+    print("Obteniendo noticias (puede tomar unos segundos)...")
     noticias_texto = obtener_noticias()
     print("Obteniendo clima...")
     clima_texto = obtener_clima()
@@ -283,15 +312,13 @@ def main():
     
     mensaje_completo = construir_mensaje(poema_texto, poema_autor, frase_texto, frase_autor, noticias_texto, clima_texto, chiste_texto)
     
-    # Guardar log completo
+    # Guardar copia de respaldo
     with open("mensaje.log", "w", encoding="utf-8") as f:
         f.write(mensaje_completo)
     
-    # Dividir con límite seguro de 1000 caracteres
+    # Dividir el mensaje en partes
     partes = dividir_mensaje(mensaje_completo, limite=1000)
-    print(f"Mensaje completo tiene {len(mensaje_completo)} caracteres, dividido en {len(partes)} partes.")
-    for i, p in enumerate(partes):
-        print(f"Parte {i+1}: {len(p)} caracteres")
+    print(f"El mensaje se dividió en {len(partes)} parte(s).")
     
     # Enviar cada parte
     for i, parte in enumerate(partes):
