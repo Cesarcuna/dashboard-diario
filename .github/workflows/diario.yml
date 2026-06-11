@@ -28,6 +28,7 @@ jobs:
         env:
           CALLMEBOT_API_KEY: ${{ secrets.CALLMEBOT_API_KEY }}
           TELEFONO: ${{ secrets.TELEFONO }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
         run: python dashboard.py
 
       - name: (Opcional) Subir log como artefacto
