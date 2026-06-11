@@ -451,7 +451,7 @@ def enviar_secciones(secciones: list[str]) -> None:
 
         # Verificar si cabe entera
         url_prueba = (
-            f"https://api.callmebot.com/whatsapp.php"
+            f"https://aapi.callmebot.com/whatsapp.php"
             f"?phone={TELEFONO}&apikey={CALLMEBOT_API_KEY}"
             f"&text={urllib.parse.quote(seccion)}"
         )
