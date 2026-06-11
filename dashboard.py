@@ -13,16 +13,15 @@ from deep_translator import GoogleTranslator
 CALLMEBOT_API_KEY = os.environ.get("CALLMEBOT_API_KEY")
 TELEFONO = os.environ.get("TELEFONO")
 OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY")
-NOTICIAS_MAX = 10  # <--- AHORA 10 POR SECCIÓN
+NOTICIAS_MAX = 10
 
 LATITUD = "20.0205"
 LONGITUD = "-98.7865"
 
-# Traductor
 translator = GoogleTranslator(source='en', target='es')
 
 # ============================================================
-# 1. POEMA
+# 1. POEMA (traducido)
 # ============================================================
 def obtener_poema():
     fallbacks = [
@@ -35,17 +34,14 @@ def obtener_poema():
         if resp.status_code == 200:
             data = resp.json()[0]
             texto_original = "\n".join([l for l in data["lines"] if l.strip()][:4])
-            if len(texto_original) > 10:
-                texto_traducido = translator.translate(texto_original)
-            else:
-                texto_traducido = texto_original
+            texto_traducido = translator.translate(texto_original) if len(texto_original) > 10 else texto_original
             return texto_traducido, data["author"]
     except:
         pass
     return random.choice(fallbacks)
 
 # ============================================================
-# 2. FRASE
+# 2. FRASE (traducida)
 # ============================================================
 def obtener_frase():
     fallbacks = [
@@ -64,54 +60,60 @@ def obtener_frase():
     return random.choice(fallbacks)
 
 # ============================================================
-# 3. NOTICIAS - VERSIÓN ORIGINAL pero SIN URLs y con 10 noticias
+# 3. NOTICIAS (mejorado y separado por secciones)
 # ============================================================
-def obtener_noticias():
+def obtener_noticias_por_seccion(url, icono, nombre):
+    """Extrae títulos de noticias de una URL dada usando selectores múltiples."""
+    titulos = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+        page = browser.new_page()
+        try:
+            page.goto(url, timeout=20000)
+            page.wait_for_load_state("networkidle")
+            
+            # Probar múltiples selectores comunes en oem.com.mx
+            selectores = [
+                "article a",           # original
+                "h2 a",                # títulos dentro de h2
+                ".article-title a",
+                ".story-title a",
+                "a.story-link"
+            ]
+            elementos = []
+            for selector in selectores:
+                elementos = page.query_selector_all(selector)
+                if elementos:
+                    print(f"Selector '{selector}' funcionó para {nombre}")
+                    break
+            
+            for el in elementos:
+                titulo = el.inner_text().strip()
+                if titulo and len(titulo) > 10 and len(titulos) < NOTICIAS_MAX:
+                    # Limpiar títulos que contengan 'GOSSIP' o basura
+                    if 'GOSSIP' not in titulo and 'PUBLICIDAD' not in titulo:
+                        titulos.append(titulo)
+        except Exception as e:
+            print(f"Error en {nombre}: {e}")
+        finally:
+            browser.close()
+    return titulos
+
+def obtener_todas_noticias():
     secciones = [
         {"url": "https://oem.com.mx/elsoldehidalgo/local/", "icono": "📍", "nombre": "Local"},
         {"url": "https://oem.com.mx/elsoldehidalgo/turismo/", "icono": "🎉", "nombre": "Turismo"}
     ]
-    todas = []
-    
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
-        page = browser.new_page()
-        
-        for sec in secciones:
-            try:
-                page.goto(sec["url"], timeout=20000)
-                page.wait_for_selector("article a", timeout=10000)
-                elementos = page.query_selector_all("article a")
-                count = 0
-                for el in elementos:
-                    titulo = el.inner_text().strip()
-                    if titulo and len(titulo) > 10 and count < NOTICIAS_MAX:
-                        todas.append({
-                            "icono": sec["icono"],
-                            "titulo": titulo,
-                            "seccion": sec["nombre"]
-                        })
-                        count += 1
-            except Exception as e:
-                print(f"Error en {sec['nombre']}: {e}")
-        browser.close()
-    
-    if not todas:
-        return "• No se pudieron obtener noticias hoy."
-    
-    # Construir texto separado por secciones
-    resultado = ""
-    for seccion in ["Local", "Turismo"]:
-        noticias_sec = [n for n in todas if n["seccion"] == seccion]
-        if noticias_sec:
-            resultado += f"*{seccion}*\n"
-            for n in noticias_sec:
-                resultado += f"{n['icono']} {n['titulo']}\n"
-            resultado += "\n"
-    return resultado
+    noticias_por_seccion = {}
+    for sec in secciones:
+        print(f"Obteniendo {sec['nombre']}...")
+        titulos = obtener_noticias_por_seccion(sec["url"], sec["icono"], sec["nombre"])
+        noticias_por_seccion[sec["nombre"]] = titulos
+        print(f"Se encontraron {len(titulos)} noticias en {sec['nombre']}")
+    return noticias_por_seccion
 
 # ============================================================
-# 4. CLIMA (igual, funciona)
+# 4. CLIMA (sin cambios, funciona)
 # ============================================================
 def obtener_clima():
     url = f"https://api.openweathermap.org/data/2.5/forecast?lat={LATITUD}&lon={LONGITUD}&appid={OPENWEATHER_API_KEY}&units=metric&lang=es"
@@ -157,31 +159,25 @@ def obtener_clima():
             hora_fin = hora_texto
         else:
             if dentro_alerta:
-                ventanas_lluvia.append(f"⏳ *{hora_inicio} a {hora_fin}* | Pico máx: *{prob_pico}%* 🌧️")
+                ventanas_lluvia.append(f"⏳ {hora_inicio} a {hora_fin} | Pico máx: {prob_pico}% 🌧️")
                 dentro_alerta = False
                 prob_pico = 0
     
     if dentro_alerta:
-        ventanas_lluvia.append(f"⏳ *{hora_inicio} en adelante* | Pico máx: *{prob_pico}%* 🌧️")
+        ventanas_lluvia.append(f"⏳ {hora_inicio} en adelante | Pico máx: {prob_pico}% 🌧️")
     
     desc_predominante = max(frecuencias_desc, key=frecuencias_desc.get) if frecuencias_desc else "despejado"
     desc_predominante = desc_predominante.capitalize()
     
-    clima_msg = f"⚡ *ASISTENTE CLIMÁTICO CENTRAL* ⚡\n"
-    clima_msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
-    clima_msg += f"📊 *RESUMEN GENERAL (24 HORAS):*\n"
-    clima_msg += f"🌤 *Cielo:* {desc_predominante}\n"
-    clima_msg += f"🌡️ *Extremos:* {round(temp_min)}°C a {round(temp_max)}°C\n"
-    clima_msg += f"💨 *Ráfagas de viento:* {round(viento_max)} km/h\n\n"
-    clima_msg += f"🚨 *VENTANAS DE ATENCIÓN POR LLUVIAS:* 🚨\n"
-    clima_msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+    clima_msg = f"⚡ CLIMA HOY ⚡\n━━━━━━━━━━━━━━━━━━━━\n"
+    clima_msg += f"🌡️ {round(temp_min)}°C a {round(temp_max)}°C\n"
+    clima_msg += f"🌤️ {desc_predominante}\n"
+    clima_msg += f"💨 Viento: {round(viento_max)} km/h\n"
     
     if ventanas_lluvia:
-        clima_msg += f"_Rangos críticos detectados (>38% de probabilidad):_\n\n"
-        clima_msg += "\n".join(ventanas_lluvia) + "\n\n"
-        clima_msg += f"⚠️ *Recomendación:* Organiza tus actividades al exterior fuera de estos horarios."
+        clima_msg += "\n🚨 Lluvias (>38%):\n" + "\n".join(ventanas_lluvia)
     else:
-        clima_msg += f"🟢 *Todo en orden:* La probabilidad de lluvia se mantendrá baja (<38%) las próximas 24 horas. ¡Excelente día! 😎"
+        clima_msg += "\n🟢 Sin lluvias relevantes."
     
     return clima_msg
 
@@ -200,95 +196,88 @@ def obtener_chiste():
     return "Programar es 10% escribir código y 90% entender por qué no funciona. 💻"
 
 # ============================================================
-# 6. CONSTRUIR MENSAJE
+# 6. CONSTRUIR MENSAJES CORTOS (uno por bloque)
 # ============================================================
-def construir_mensaje(poema_texto, poema_autor, frase_texto, frase_autor, noticias_texto, clima_texto, chiste_texto):
+def mensaje_bienvenida():
     hoy = datetime.now().strftime("%A %d de %B")
-    SEP = "━━━━━━━━━━━━━━━━━━━━"
-    return f"""🌅 *Buenos días — {hoy}*
-{SEP}
+    return f"🌅 *Buenos días — {hoy}*\n━━━━━━━━━━━━━━━━━━━━"
 
-🌹 *VERSOS DEL DÍA*
+def mensaje_poema_frase(poema_texto, poema_autor, frase_texto, frase_autor):
+    return f"""🌹 *VERSOS DEL DÍA*
 _{poema_texto}_
     ✍️ _— {poema_autor}_
 
-🧠 *REFLEXIÓN PARA MEDITAR*
+🧠 *REFLEXIÓN*
 "{frase_texto}"
-    ✍️ _— {frase_autor}_
+    ✍️ _— {frase_autor}_"""
 
-{SEP}
-📰 *NOTICIAS DE HIDALGO*
+def mensaje_noticias_seccion(nombre, icono, titulos):
+    if not titulos:
+        return f"{icono} *{nombre}*: No hay noticias recientes."
+    texto = f"{icono} *{nombre}*\n"
+    for t in titulos[:NOTICIAS_MAX]:
+        texto += f"• {t}\n"
+    return texto
 
-{noticias_texto}
-{SEP}
-{clima_texto}
-
-{SEP}
-😄 *MOMENTO DE RELAX*
-_{chiste_texto}_
-
-{SEP}
-✨ _Un día a la vez. ¡Que tengas un gran día!_"""
+def mensaje_despedida():
+    return "✨ _Un día a la vez. ¡Que tengas un gran día!_"
 
 # ============================================================
-# 7. ENVIAR WHATSAPP
+# 7. ENVIAR WHATSAPP (un mensaje corto)
 # ============================================================
 def enviar_whatsapp(mensaje):
     import urllib.parse
+    if not mensaje.strip():
+        return
     texto_codificado = urllib.parse.quote(mensaje)
     url = f"https://api.callmebot.com/whatsapp.php?phone={TELEFONO}&apikey={CALLMEBOT_API_KEY}&text={texto_codificado}"
     try:
         resp = requests.get(url)
-        print(f"CallMeBot respondió: {resp.status_code}")
+        print(f"Enviado ({len(mensaje)} chars) → {resp.status_code}")
+        time.sleep(2)  # pequeña pausa entre mensajes
     except Exception as e:
         print(f"Error: {e}")
 
 # ============================================================
-# 8. DIVIDIR MENSAJE (para que no se corte)
-# ============================================================
-def dividir_mensaje(texto, limite=1000):
-    partes = []
-    while len(texto) > limite:
-        corte = texto.rfind('\n', 0, limite)
-        if corte == -1:
-            corte = texto.rfind(' ', 0, limite)
-        if corte == -1 or corte < limite - 100:
-            corte = limite
-        partes.append(texto[:corte].strip())
-        texto = texto[corte:].strip()
-    partes.append(texto)
-    return partes
-
-# ============================================================
-# 9. MAIN
+# 8. MAIN (envío secuencial)
 # ============================================================
 def main():
-    print("Obteniendo poema...")
+    print("Obteniendo poema y frase...")
     poema_texto, poema_autor = obtener_poema()
-    print("Obteniendo frase...")
     frase_texto, frase_autor = obtener_frase()
+    
     print("Obteniendo noticias...")
-    noticias_texto = obtener_noticias()
+    todas_noticias = obtener_todas_noticias()
+    
     print("Obteniendo clima...")
     clima_texto = obtener_clima()
+    
     print("Obteniendo chiste...")
     chiste_texto = obtener_chiste()
     
-    mensaje_completo = construir_mensaje(poema_texto, poema_autor, frase_texto, frase_autor, noticias_texto, clima_texto, chiste_texto)
+    # Enviar mensaje de bienvenida
+    enviar_whatsapp(mensaje_bienvenida())
     
-    with open("mensaje.log", "w", encoding="utf-8") as f:
-        f.write(mensaje_completo)
+    # Enviar poema + frase
+    enviar_whatsapp(mensaje_poema_frase(poema_texto, poema_autor, frase_texto, frase_autor))
     
-    partes = dividir_mensaje(mensaje_completo, limite=1000)
-    print(f"Mensaje de {len(mensaje_completo)} caracteres dividido en {len(partes)} partes.")
+    # Enviar noticias por separado (Local y Turismo)
+    for nombre in ["Local", "Turismo"]:
+        titulos = todas_noticias.get(nombre, [])
+        icono = "📍" if nombre == "Local" else "🎉"
+        msg = mensaje_noticias_seccion(nombre, icono, titulos)
+        enviar_whatsapp(msg)
     
-    for i, parte in enumerate(partes):
-        print(f"Enviando parte {i+1}/{len(partes)}...")
-        enviar_whatsapp(parte)
-        if i < len(partes) - 1:
-            time.sleep(3)
+    # Enviar clima
+    enviar_whatsapp(clima_texto)
     
-    print("¡Listo!")
+    # Enviar chiste
+    enviar_whatsapp(chiste_texto)
+    
+    # Enviar despedida
+    enviar_whatsapp(mensaje_despedida())
+    
+    print("¡Dashboard completo enviado!")
 
 if __name__ == "__main__":
     main()
