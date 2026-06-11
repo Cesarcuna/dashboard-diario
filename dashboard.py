@@ -1,25 +1,28 @@
 import requests
 import json
 import random
-import time  # <-- NUEVO: para pausar entre mensajes
+import time
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 import os
+from deep_translator import GoogleTranslator
 
 # ============================================================
-# CONFIGURACIÓN (variables de entorno)
+# CONFIGURACIÓN
 # ============================================================
 CALLMEBOT_API_KEY = os.environ.get("CALLMEBOT_API_KEY")
 TELEFONO = os.environ.get("TELEFONO")
 OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY")
 NOTICIAS_MAX = 3
 
-# Coordenadas de Pachuca
 LATITUD = "20.0205"
 LONGITUD = "-98.7865"
 
+# Traductor (se reutiliza)
+translator = GoogleTranslator(source='en', target='es')
+
 # ============================================================
-# 1. POEMA
+# 1. POEMA (traducido)
 # ============================================================
 def obtener_poema():
     fallbacks = [
@@ -31,14 +34,20 @@ def obtener_poema():
         resp = requests.get("https://poetrydb.org/random/1", headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             data = resp.json()[0]
-            texto = "\n".join([l for l in data["lines"] if l.strip()][:4])
-            return texto, data["author"]
-    except:
-        pass
+            texto_original = "\n".join([l for l in data["lines"] if l.strip()][:4])
+            # Traducir texto (solo si tiene más de 10 caracteres)
+            if len(texto_original) > 10:
+                texto_traducido = translator.translate(texto_original)
+            else:
+                texto_traducido = texto_original
+            autor = data["author"]
+            return texto_traducido, autor
+    except Exception as e:
+        print(f"Error en poema: {e}")
     return random.choice(fallbacks)
 
 # ============================================================
-# 2. FRASE
+# 2. FRASE (traducida)
 # ============================================================
 def obtener_frase():
     fallbacks = [
@@ -50,13 +59,16 @@ def obtener_frase():
         resp = requests.get("https://zenquotes.io/api/random", headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200:
             q = resp.json()[0]
-            return q["q"], q["a"]
-    except:
-        pass
+            texto_original = q["q"]
+            autor = q["a"]
+            texto_traducido = translator.translate(texto_original)
+            return texto_traducido, autor
+    except Exception as e:
+        print(f"Error en frase: {e}")
     return random.choice(fallbacks)
 
 # ============================================================
-# 3. NOTICIAS (scraping con Playwright)
+# 3. NOTICIAS (igual, sin cambios)
 # ============================================================
 def obtener_noticias():
     secciones = [
@@ -100,7 +112,7 @@ def obtener_noticias():
     return resultado
 
 # ============================================================
-# 4. CLIMA
+# 4. CLIMA (sin cambios)
 # ============================================================
 def obtener_clima():
     url = f"https://api.openweathermap.org/data/2.5/forecast?lat={LATITUD}&lon={LONGITUD}&appid={OPENWEATHER_API_KEY}&units=metric&lang=es"
@@ -176,7 +188,7 @@ def obtener_clima():
     return clima_msg
 
 # ============================================================
-# 5. CHISTE
+# 5. CHISTE (ya viene en español de JokeAPI)
 # ============================================================
 def obtener_chiste():
     try:
@@ -190,7 +202,7 @@ def obtener_chiste():
     return "Programar es 10% escribir código y 90% entender por qué no funciona. 💻"
 
 # ============================================================
-# 6. CONSTRUIR MENSAJE COMPLETO
+# 6. CONSTRUIR MENSAJE
 # ============================================================
 def construir_mensaje(poema_texto, poema_autor, frase_texto, frase_autor, noticias_texto, clima_texto, chiste_texto):
     hoy = datetime.now().strftime("%A %d de %B")
@@ -221,10 +233,13 @@ _{chiste_texto}_
 ✨ _Un día a la vez. ¡Que tengas un gran día!_"""
 
 # ============================================================
-# 7. ENVIAR WHATSAPP (sin cambios, pero lo usaremos varias veces)
+# 7. ENVIAR WHATSAPP
 # ============================================================
 def enviar_whatsapp(mensaje):
-    url = f"https://api.callmebot.com/whatsapp.php?phone={TELEFONO}&apikey={CALLMEBOT_API_KEY}&text={mensaje}"
+    # Codificar el mensaje para URL
+    import urllib.parse
+    texto_codificado = urllib.parse.quote(mensaje)
+    url = f"https://api.callmebot.com/whatsapp.php?phone={TELEFONO}&apikey={CALLMEBOT_API_KEY}&text={texto_codificado}"
     try:
         resp = requests.get(url)
         print(f"CallMeBot respondió: {resp.status_code} - {resp.text[:100]}")
@@ -232,35 +247,34 @@ def enviar_whatsapp(mensaje):
         print(f"Error al enviar WhatsApp: {e}")
 
 # ============================================================
-# 8. NUEVA FUNCIÓN: DIVIDIR MENSAJE EN PARTES
+# 8. DIVIDIR MENSAJE (mejorado)
 # ============================================================
-def dividir_mensaje(texto, limite=1500):
+def dividir_mensaje(texto, limite=1000):
     """
-    Divide un texto largo en fragmentos sin cortar palabras a la mitad.
-    El límite por defecto es 1500 caracteres (CallMeBot puede manejar ~1600, pero usamos margen).
+    Divide el texto en partes sin cortar palabras ni URLs.
     """
     partes = []
     while len(texto) > limite:
-        # Buscar el último salto de línea dentro del límite
+        # Buscar corte por salto de línea
         corte = texto.rfind('\n', 0, limite)
         if corte == -1:
-            corte = texto.rfind(' ', 0, limite)  # buscar último espacio
-        if corte == -1:
-            corte = limite  # cortar forzosamente
+            corte = texto.rfind(' ', 0, limite)
+        if corte == -1 or corte < limite - 100:  # si no hay espacio o salto cerca del límite, forzar corte en límite
+            corte = limite
         partes.append(texto[:corte].strip())
         texto = texto[corte:].strip()
     partes.append(texto)
     return partes
 
 # ============================================================
-# 9. FUNCIÓN PRINCIPAL MODIFICADA
+# 9. MAIN
 # ============================================================
 def main():
     print("Obteniendo poema...")
     poema_texto, poema_autor = obtener_poema()
     print("Obteniendo frase...")
     frase_texto, frase_autor = obtener_frase()
-    print("Obteniendo noticias (puede tomar unos segundos)...")
+    print("Obteniendo noticias...")
     noticias_texto = obtener_noticias()
     print("Obteniendo clima...")
     clima_texto = obtener_clima()
@@ -269,20 +283,22 @@ def main():
     
     mensaje_completo = construir_mensaje(poema_texto, poema_autor, frase_texto, frase_autor, noticias_texto, clima_texto, chiste_texto)
     
-    # Guardar copia de respaldo
+    # Guardar log completo
     with open("mensaje.log", "w", encoding="utf-8") as f:
         f.write(mensaje_completo)
     
-    # Dividir el mensaje en partes
-    partes = dividir_mensaje(mensaje_completo, limite=1500)
-    print(f"El mensaje se dividió en {len(partes)} parte(s).")
+    # Dividir con límite seguro de 1000 caracteres
+    partes = dividir_mensaje(mensaje_completo, limite=1000)
+    print(f"Mensaje completo tiene {len(mensaje_completo)} caracteres, dividido en {len(partes)} partes.")
+    for i, p in enumerate(partes):
+        print(f"Parte {i+1}: {len(p)} caracteres")
     
     # Enviar cada parte
     for i, parte in enumerate(partes):
         print(f"Enviando parte {i+1}/{len(partes)}...")
         enviar_whatsapp(parte)
         if i < len(partes) - 1:
-            time.sleep(3)  # espera 3 segundos entre mensajes para evitar bloqueos
+            time.sleep(3)
     
     print("¡Proceso completado!")
 
