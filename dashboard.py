@@ -138,40 +138,6 @@ def obtener_frase() -> tuple[str, str]:
 # ============================================================
 # 3. NOTICIAS
 # ============================================================
-NOTICIAS_TIMEOUT_NAV  = 30000   # ms para page.goto  (subido de 20s a 30s)
-NOTICIAS_TIMEOUT_SEL  = 15000   # ms para wait_for_selector
-NOTICIAS_REINTENTOS   = 2       # intentos por sección si hay timeout
-
-def _scrape_seccion(page, sec: dict) -> list[dict]:
-    """Extrae noticias de una sección. Lanza excepción si falla."""
-    response = page.goto(sec["url"], timeout=NOTICIAS_TIMEOUT_NAV)
-    print(f"  HTTP {response.status if response else '?'}")
-
-    # Esperar con scroll suave para forzar carga lazy
-    page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
-    page.wait_for_selector("article a", timeout=NOTICIAS_TIMEOUT_SEL)
-
-    elementos = page.query_selector_all("article a")
-    print(f"  {len(elementos)} elementos encontrados.")
-
-    noticias = []
-    count = vacios = cortos = 0
-    for el in elementos:
-        titulo = el.inner_text().strip()
-        if not titulo:
-            vacios += 1
-            continue
-        if len(titulo) <= 10:
-            cortos += 1
-            continue
-        if count < NOTICIAS_MAX:
-            noticias.append({"icono": sec["icono"], "titulo": titulo, "seccion": sec["nombre"]})
-            count += 1
-
-    print(f"  {count} guardadas | {vacios} vacías | {cortos} cortas.")
-    return noticias
-
-
 def obtener_noticias() -> str:
     secciones = [
         {"url": "https://www.elsoldehidalgo.com.mx/local/",   "icono": "📍", "nombre": "Local"},
@@ -181,34 +147,37 @@ def obtener_noticias() -> str:
 
     print("\n--- INICIANDO EXTRACCIÓN DE NOTICIAS ---")
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
-        )
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+        page = browser.new_page()
 
         for sec in secciones:
-            print(f"\n➤ {sec['nombre']}")
-            exito = False
+            print(f"\n➤ Procesando sección: {sec['nombre']}")
+            try:
+                response = page.goto(sec["url"], timeout=20000)
+                print(f"[{sec['nombre']}] HTTP {response.status if response else '?'}")
+                page.wait_for_selector("article a", timeout=20000)
 
-            for intento in range(1, NOTICIAS_REINTENTOS + 1):
-                # Página nueva por cada intento para evitar estado sucio
-                page = browser.new_page()
-                try:
-                    print(f"  Intento {intento}/{NOTICIAS_REINTENTOS}...")
-                    noticias = _scrape_seccion(page, sec)
-                    todas.extend(noticias)
-                    exito = True
-                    break
-                except Exception as e:
-                    print(f"  ⚠️  {type(e).__name__}: {str(e)[:120]}")
-                    if intento < NOTICIAS_REINTENTOS:
-                        print(f"  Reintentando en 3 s...")
-                        time.sleep(3)
-                finally:
-                    page.close()
+                elementos = page.query_selector_all("article a")
+                print(f"[{sec['nombre']}] {len(elementos)} elementos encontrados.")
 
-            if not exito:
-                print(f"  ❌ No se pudo obtener sección '{sec['nombre']}' tras {NOTICIAS_REINTENTOS} intentos.")
+                count = vacios = cortos = 0
+                for el in elementos:
+                    titulo = el.inner_text().strip()
+                    if not titulo:
+                        vacios += 1
+                        continue
+                    if len(titulo) <= 10:
+                        cortos += 1
+                        continue
+                    if count < NOTICIAS_MAX:
+                        todas.append({"icono": sec["icono"], "titulo": titulo, "seccion": sec["nombre"]})
+                        count += 1
+                        print(f"  [{count}] {titulo[:50]}...")
+
+                print(f"[{sec['nombre']}] {count} guardadas | {vacios} vacías | {cortos} cortas.")
+
+            except Exception as e:
+                print(f"[{sec['nombre']}] ERROR: {type(e).__name__} – {e}")
 
         browser.close()
 
@@ -330,53 +299,12 @@ def obtener_chiste() -> str:
 
 
 # ============================================================
-# 6. VERSÍCULO DEL DÍA
+# 6. CONSTRUIR SECCIONES INDEPENDIENTES
 # ============================================================
-_VERSICULOS_FALLBACK = [
-    ("Filipenses 4:13",  "Todo lo puedo en Cristo que me fortalece."),
-    ("Jeremías 29:11",   "Yo sé los planes que tengo para ustedes: planes de bienestar y no de calamidad, para darles un futuro y una esperanza."),
-    ("Isaías 40:31",     "Los que esperan en el Señor renovarán sus fuerzas; volarán como águilas."),
-    ("Salmos 23:1",      "El Señor es mi pastor; nada me faltará."),
-    ("Proverbios 3:5",   "Confía en el Señor con todo tu corazón y no te apoyes en tu propia prudencia."),
-    ("Mateo 6:34",       "No se preocupen por el mañana; el mañana se preocupará por sí mismo."),
-    ("Romanos 8:28",     "Sabemos que Dios dispone todas las cosas para el bien de quienes lo aman."),
-]
+# En lugar de un solo string gigante, devolvemos una lista de bloques
+# lógicos. Cada bloque se dividirá de forma independiente si es necesario.
+# Esto evita que una sección quede "pegada" a otra al cortar.
 
-_REFERENCIAS = [
-    "john+3:16", "psalms+23:1", "philippians+4:13", "jeremiah+29:11",
-    "isaiah+40:31", "romans+8:28", "proverbs+3:5-6", "matthew+6:33",
-    "joshua+1:9",  "psalm+46:1",  "john+14:6",       "romans+12:2",
-    "1corinthians+13:4-5", "ephesians+2:8", "james+1:2-3",
-]
-
-def obtener_versiculo() -> tuple[str, str]:
-    """
-    Devuelve (texto, referencia) usando bible-api.com (gratuita, sin key).
-    Traduce al español si el texto viene en inglés.
-    """
-    referencia = random.choice(_REFERENCIAS)
-    try:
-        resp = requests.get(
-            f"https://bible-api.com/{referencia}?translation=kjv",
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            texto_en = data.get("text", "").strip().replace("\n", " ")
-            ref      = data.get("reference", referencia)
-            if texto_en:
-                texto_es = translator.translate(texto_en)
-                return texto_es, ref
-    except Exception as e:
-        print(f"[versiculo] Error: {e}")
-
-    ref_fb, texto_fb = random.choice(_VERSICULOS_FALLBACK)
-    return texto_fb, ref_fb
-
-
-# ============================================================
-# 7. CONSTRUIR SECCIONES INDEPENDIENTES
-# ============================================================
 SEP = "━━━━━━━━━━━━━━━━━━━━"
 
 def construir_secciones(
@@ -385,16 +313,13 @@ def construir_secciones(
     noticias_texto,
     clima_texto,
     chiste_texto,
-    versiculo_texto, versiculo_ref,
 ) -> list[str]:
     hoy = datetime.now().strftime("%A %d de %B")
 
     secciones = [
-        # Encabezado + versículo + poema + frase
+        # Encabezado + poema + frase
         (
             f"🌅 *Buenos días — {hoy}*\n{SEP}\n"
-            f"✝️ *ORACIÓN DEL DÍA*\n_{versiculo_texto}_\n"
-            f"    📖 _{versiculo_ref}_\n\n"
             f"🌹 *VERSOS DEL DÍA*\n_{poema_texto}_\n"
             f"    ✍️ _— {poema_autor}_\n\n"
             f"🧠 *REFLEXIÓN*\n\"{frase_texto}\"\n"
@@ -451,7 +376,7 @@ def enviar_secciones(secciones: list[str]) -> None:
 
         # Verificar si cabe entera
         url_prueba = (
-            f"https://aapi.callmebot.com/whatsapp.php"
+            f"https://api.callmebot.com/whatsapp.php"
             f"?phone={TELEFONO}&apikey={CALLMEBOT_API_KEY}"
             f"&text={urllib.parse.quote(seccion)}"
         )
@@ -488,9 +413,6 @@ def enviar_secciones(secciones: list[str]) -> None:
 def main():
     print("🌅 Iniciando bot de buenos días...\n")
 
-    print("✝️  Obteniendo versículo...")
-    versiculo_texto, versiculo_ref = obtener_versiculo()
-
     print("📖 Obteniendo poema...")
     poema_texto, poema_autor = obtener_poema()
 
@@ -512,7 +434,6 @@ def main():
         noticias_texto,
         clima_texto,
         chiste_texto,
-        versiculo_texto, versiculo_ref,
     )
 
     # Log completo para debugging
