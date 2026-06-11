@@ -64,12 +64,12 @@ def obtener_frase():
     return random.choice(fallbacks)
 
 # ============================================================
-# 3. NOTICIAS - VERSIÓN ORIGINAL pero SIN URLs y con 10 noticias
+# 3. NOTICIAS - URls Corregidas
 # ============================================================
 def obtener_noticias():
     secciones = [
-        {"url": "https://oem.com.mx/elsoldehidalgo/local/", "icono": "📍", "nombre": "Local"},
-        {"url": "https://oem.com.mx/elsoldehidalgo/turismo/", "icono": "🎉", "nombre": "Turismo"}
+        {"url": "https://www.elsoldehidalgo.com.mx/local/", "icono": "📍", "nombre": "Local"},
+        {"url": "https://www.elsoldehidalgo.com.mx/turismo/", "icono": "🎉", "nombre": "Turismo"}
     ]
     todas = []
     
@@ -99,7 +99,6 @@ def obtener_noticias():
     if not todas:
         return "• No se pudieron obtener noticias hoy."
     
-    # Construir texto separado por secciones
     resultado = ""
     for seccion in ["Local", "Turismo"]:
         noticias_sec = [n for n in todas if n["seccion"] == seccion]
@@ -111,7 +110,7 @@ def obtener_noticias():
     return resultado
 
 # ============================================================
-# 4. CLIMA (igual, funciona)
+# 4. CLIMA
 # ============================================================
 def obtener_clima():
     url = f"https://api.openweathermap.org/data/2.5/forecast?lat={LATITUD}&lon={LONGITUD}&appid={OPENWEATHER_API_KEY}&units=metric&lang=es"
@@ -231,7 +230,7 @@ _{chiste_texto}_
 ✨ _Un día a la vez. ¡Que tengas un gran día!_"""
 
 # ============================================================
-# 7. ENVIAR WHATSAPP
+# 7. ENVIAR WHATSAPP (Mejorado para debugging)
 # ============================================================
 def enviar_whatsapp(mensaje):
     import urllib.parse
@@ -239,24 +238,29 @@ def enviar_whatsapp(mensaje):
     url = f"https://api.callmebot.com/whatsapp.php?phone={TELEFONO}&apikey={CALLMEBOT_API_KEY}&text={texto_codificado}"
     try:
         resp = requests.get(url)
-        print(f"CallMeBot respondió: {resp.status_code}")
+        print(f"CallMeBot respondió: {resp.status_code} - {resp.text}")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error enviando mensaje: {e}")
 
 # ============================================================
-# 8. DIVIDIR MENSAJE (para que no se corte)
+# 8. DIVIDIR MENSAJE (Inteligente, no rompe palabras)
 # ============================================================
-def dividir_mensaje(texto, limite=1000):
+def dividir_mensaje(texto, limite=600):
     partes = []
-    while len(texto) > limite:
-        corte = texto.rfind('\n', 0, limite)
-        if corte == -1:
-            corte = texto.rfind(' ', 0, limite)
-        if corte == -1 or corte < limite - 100:
-            corte = limite
-        partes.append(texto[:corte].strip())
-        texto = texto[corte:].strip()
-    partes.append(texto)
+    lineas = texto.split('\n')
+    parte_actual = ""
+
+    for linea in lineas:
+        if len(parte_actual) + len(linea) + 1 <= limite:
+            parte_actual += linea + "\n"
+        else:
+            if parte_actual.strip():
+                partes.append(parte_actual.strip())
+            parte_actual = linea + "\n"
+            
+    if parte_actual.strip():
+        partes.append(parte_actual.strip())
+
     return partes
 
 # ============================================================
@@ -279,14 +283,15 @@ def main():
     with open("mensaje.log", "w", encoding="utf-8") as f:
         f.write(mensaje_completo)
     
-    partes = dividir_mensaje(mensaje_completo, limite=1000)
+    # DIVISIÓN CON LÍMITE DE 600 PARA EVITAR CORTES EN LA URL
+    partes = dividir_mensaje(mensaje_completo, limite=600)
     print(f"Mensaje de {len(mensaje_completo)} caracteres dividido en {len(partes)} partes.")
     
     for i, parte in enumerate(partes):
         print(f"Enviando parte {i+1}/{len(partes)}...")
         enviar_whatsapp(parte)
         if i < len(partes) - 1:
-            time.sleep(3)
+            time.sleep(4)
     
     print("¡Listo!")
 
